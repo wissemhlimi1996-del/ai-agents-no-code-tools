@@ -112,7 +112,7 @@ def generate_chatterbox_tts(
         None, description="Sample audio file for voice cloning"
     ),
     exaggeration: Optional[float] = Form(
-        1.0, description="Exaggeration factor for voice cloning"
+        0.5, description="Exaggeration factor for voice cloning"
     ),
     cfg_weight: Optional[float] = Form(0.5, description="CFG weight for voice cloning"),
     temperature: Optional[float] = Form(

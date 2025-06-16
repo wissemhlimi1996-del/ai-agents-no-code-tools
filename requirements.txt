@@ -4,6 +4,6 @@ kokoro
 soundfile
 fastapi[standard]
 loguru
-chatterbox-tts
+chatterbox-tts >= 0.1.2
 faster_whisper
 torchaudio

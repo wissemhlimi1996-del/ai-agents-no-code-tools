@@ -5,6 +5,7 @@
 # Docker
 Dockerfile
 .dockerignore
+._.DS_Store
 
 # Python
 __pycache__/
