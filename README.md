@@ -1,4 +1,4 @@
-# AI Agents A-Z No-Code Tools (Lite Edition)
+# AI Agents A-Z No-Code Tools (V1)
 
 Video editing tools to use with no-code tools like n8n, Zapier, and Make. Brought to you by [AI Agents A-Z](https://www.youtube.com/@aiagentsaz).
 
