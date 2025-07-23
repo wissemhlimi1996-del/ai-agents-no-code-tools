@@ -8,6 +8,7 @@ ARG OS
 USER root
 
 RUN apt update && apt install -y \
+    fonts-ebgaramond \
     build-essential \
     g++ \
     curl \
@@ -32,9 +33,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
 
+COPY api_server /app/api_server
+COPY utils /app/utils
 COPY video /app/video
 COPY server.py /app/server.py
-COPY assets /app/assets
 
 ENV PYTHONUNBUFFERED=1
 

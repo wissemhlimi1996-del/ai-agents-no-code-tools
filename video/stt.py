@@ -1,20 +1,30 @@
 from faster_whisper import WhisperModel
 from loguru import logger
-from video.config import device
+from video.config import device, whisper_model, whisper_compute_type
 
 
 class STT:
-    def __init__(self, model_size="tiny", compute_type="int8"):
-        self.model = WhisperModel(model_size, compute_type=compute_type)
+    def __init__(self):
+        self.model = WhisperModel(
+            model_size_or_path=whisper_model, 
+            compute_type=whisper_compute_type
+        )
 
-    def transcribe(self, audio_path, beam_size=5):
+    def transcribe(self, audio_path, language = None, beam_size=5):
         logger.bind(
             device=device.type,
+            model_size=whisper_model,
+            compute_type=whisper_compute_type,
+            audio_path=audio_path,
+            language=language,
         ).debug(
             "transcribing audio with Whisper model",
         )
         segments, info = self.model.transcribe(
-            audio_path, beam_size=beam_size, word_timestamps=True
+            audio_path,
+            beam_size=beam_size,
+            word_timestamps=True,
+            language=language,
         )
 
         duration = info.duration

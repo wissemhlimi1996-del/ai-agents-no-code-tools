@@ -1,3 +1,4 @@
+import re
 import time
 import warnings
 from typing import List
@@ -16,22 +17,25 @@ LANGUAGE_CONFIG = {
     "en-us": {
         "lang_code": "a",
         "international": False,
+        "iso639_1": "en",
     },
     "en": {
         "lang_code": "a",
         "international": False,
+        "iso639_1": "en",
     },
     "en-gb": {
         "lang_code": "b",
         "international": False,
+        "iso639_1": "en",
     },
-    "es": {"lang_code": "e", "international": True},
-    "fr": {"lang_code": "f", "international": True},
-    "hi": {"lang_code": "h", "international": True},
-    "it": {"lang_code": "i", "international": True},
-    "pt": {"lang_code": "p", "international": True},
-    "ja": {"lang_code": "j", "international": True},
-    "zh": {"lang_code": "z", "international": True},
+    "es": {"lang_code": "e", "international": True, "iso639_1": "es"},
+    "fr": {"lang_code": "f", "international": True, "iso639_1": "fr"},
+    "hi": {"lang_code": "h", "international": True, "iso639_1": "hi"},
+    "it": {"lang_code": "i", "international": True, "iso639_1": "it"},
+    "pt": {"lang_code": "p", "international": True, "iso639_1": "pt"},
+    "ja": {"lang_code": "j", "international": True, "iso639_1": "ja"},
+    "zh": {"lang_code": "z", "international": True, "iso639_1": "zh"},
 }
 LANGUAGE_VOICE_CONFIG = {
     "en-us": [
@@ -93,7 +97,199 @@ for lang, voices in LANGUAGE_VOICE_CONFIG.items():
 
 
 class TTS:
-    def kokoro(
+    def break_text_into_sentences(self, text, lang_code) -> List[str]:
+        """
+        Advanced sentence splitting with better handling of abbreviations and edge cases.
+        """
+        if not text or not text.strip():
+            return []
+
+        # Language-specific sentence boundary patterns
+        patterns = {
+            "a": r"(?<=[.!?])\s+(?=[A-Z_])",  # English
+            "e": r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÑÜ¿¡_])",  # Spanish - allow inverted punctuation after boundaries
+            "f": r"(?<=[.!?])\s+(?=[A-ZÁÀÂÄÇÉÈÊËÏÎÔÖÙÛÜŸ_])",  # French
+            "h": r"(?<=[।!?])\s+",  # Hindi: Split after devanagari danda
+            "i": r"(?<=[.!?])\s+(?=[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß_])",  # Italian
+            "p": r"(?<=[.!?])\s+(?=[A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ_])",  # Portuguese
+            "z": r"(?<=[。！？])",  # Chinese: Split after Chinese punctuation
+        }
+
+        # Common abbreviations that shouldn't trigger sentence breaks
+        abbreviations = {
+            "a": {
+                "Mr.",
+                "Mrs.",
+                "Ms.",
+                "Dr.",
+                "Prof.",
+                "Sr.",
+                "Jr.",
+                "Inc.",
+                "Corp.",
+                "Ltd.",
+                "Co.",
+                "etc.",
+                "vs.",
+                "eg.",
+                "i.e.",
+                "e.g.",
+                "Vol.",
+                "Ch.",
+                "Fig.",
+                "No.",
+                "p.",
+                "pp.",
+            },  # English
+            "e": {
+                "Sr.",
+                "Sra.",
+                "Dr.",
+                "Dra.",
+                "Prof.",
+                "etc.",
+                "pág.",
+                "art.",
+                "núm.",
+                "cap.",
+                "vol.",
+            },  # Spanish
+            "f": {
+                "M.",
+                "Mme.",
+                "Dr.",
+                "Prof.",
+                "etc.",
+                "art.",
+                "p.",
+                "vol.",
+                "ch.",
+                "fig.",
+                "n°",
+            },  # French
+            "h": {"श्री", "श्रीमती", "डॉ.", "प्रो.", "etc.", "पृ.", "अध."},  # Hindi
+            "i": {
+                "Sig.",
+                "Sig.ra",
+                "Dr.",
+                "Prof.",
+                "ecc.",
+                "pag.",
+                "art.",
+                "n.",
+                "vol.",
+                "cap.",
+                "fig.",
+            },  # Italian
+            "p": {
+                "Sr.",
+                "Sra.",
+                "Dr.",
+                "Dra.",
+                "Prof.",
+                "etc.",
+                "pág.",
+                "art.",
+                "n.º",
+                "vol.",
+                "cap.",
+            },  # Portuguese
+            "z": {"先生", "女士", "博士", "教授", "等等", "第", "页", "章"},  # Chinese
+        }
+
+        abbrevs = abbreviations.get(lang_code, set())
+
+        # Protect abbreviations by temporarily replacing them
+        protected_text = text
+        replacements = {}
+        for i, abbrev in enumerate(abbrevs):
+            placeholder = f"__ABBREV_{i}__"
+            protected_text = protected_text.replace(abbrev, placeholder)
+            replacements[placeholder] = abbrev
+
+        # Apply the regex splitting
+        pattern = patterns.get(lang_code, patterns["a"])
+        sentences = re.split(pattern, protected_text.strip())
+
+        # Restore abbreviations and clean up
+        restored_sentences = []
+        for sentence in sentences:
+            for placeholder, original in replacements.items():
+                sentence = sentence.replace(placeholder, original)
+            sentence = sentence.strip()
+            if sentence:
+                restored_sentences.append(sentence)
+
+        return restored_sentences if restored_sentences else [text.strip()]
+
+    def kokoro_international(
+        self, text: str, output_path: str, voice: str, lang_code: str, speed=1
+    ) -> tuple[str, List[dict], float]:
+        if not text or not text.strip():
+            raise ValueError("Text cannot be empty or whitespace")
+        lang_code = LANGUAGE_VOICE_MAP.get(voice, {}).get("lang_code")
+        if not lang_code:
+            raise ValueError(f"Voice '{voice}' not found in LANGUAGE_VOICE_MAP")
+        start = time.time()
+        context_logger = logger.bind(
+            voice=voice,
+            speed=speed,
+            text_length=len(text),
+        )
+        context_logger.debug("Starting TTS generation (international) with kokoro")
+        sentences = self.break_text_into_sentences(text, lang_code)
+        context_logger.debug(
+            "Text split into sentences",
+            sentences=sentences,
+            num_sentences=len(sentences),
+        )
+
+        # generate the audio for each sentence
+        audio_data = []
+        captions = []
+        full_audio_length = 0
+        pipeline = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", device=device)
+        for sentence in sentences:
+            context_logger.debug(
+                "Processing sentence",
+                sentence=sentence,
+                voice=voice,
+                speed=speed,
+            )
+            generator = pipeline(sentence, voice=voice, speed=speed)
+
+            for i, result in enumerate(generator):
+                context_logger.debug(
+                    "Generated audio for sentence",
+                )
+                data = result.audio
+                audio_length = len(data) / 24000
+                audio_data.append(data)
+                # since there are no tokens, we can just use the sentence as the text
+                captions.append(
+                    {
+                        "text": sentence,
+                        "start_ts": full_audio_length,
+                        "end_ts": full_audio_length + audio_length,
+                    }
+                )
+                full_audio_length += audio_length
+
+        context_logger = context_logger.bind(
+            execution_time=time.time() - start,
+            audio_length=full_audio_length,
+            speedup=full_audio_length / (time.time() - start),
+        )
+        context_logger.debug(
+            "TTS generation (international) completed with kokoro",
+        )
+
+        audio_data = np.concatenate(audio_data)
+        audio_data = np.column_stack((audio_data, audio_data))
+        sf.write(output_path, audio_data, 24000, format="WAV")
+        return captions, full_audio_length
+
+    def kokoro_english(
         self, text: str, output_path: str, voice="af_heart", speed=1
     ) -> tuple[str, List[dict], float]:
         if not text or not text.strip():
@@ -117,7 +313,7 @@ class TTS:
         context_logger.debug("Starting TTS generation with kokoro")
         if not text or not text.strip():
             raise ValueError("Text cannot be empty or whitespace")
-        pipeline = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", device=device)
+        pipeline = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", device=device.type)
 
         generator = pipeline(text, voice=voice, speed=speed)
 
@@ -166,6 +362,19 @@ class TTS:
         )
         return captions, full_audio_length
 
+    def kokoro(
+        self, text: str, output_path: str, voice="af_heart", speed=1
+    ) -> tuple[str, List[dict], float]:
+        if not text or not text.strip():
+            raise ValueError("Text cannot be empty or whitespace")
+        lang_code = LANGUAGE_VOICE_MAP.get(voice, {}).get("lang_code")
+        if not lang_code:
+            raise ValueError(f"Voice '{voice}' not found in LANGUAGE_VOICE_MAP")
+        if lang_code == "a":
+            return self.kokoro_english(text, output_path, voice, speed)
+        else:
+            return self.kokoro_international(text, output_path, voice, lang_code, speed)
+
     def chatterbox(
         self,
         text: str,
@@ -187,7 +396,7 @@ class TTS:
             device=device.type,
         )
         context_logger.debug("starting TTS generation with Chatterbox")
-        model = ChatterboxTTS.from_pretrained(device=device)
+        model = ChatterboxTTS.from_pretrained(device=device.type)
 
         if sample_audio_path:
             wav = model.generate(
@@ -221,7 +430,7 @@ class TTS:
             "TTS generation with Chatterbox completed",
         )
 
-    def valid_kokoro_voices(self, lang_code: str = "en-us") -> List[str]:
+    def valid_kokoro_voices(self, lang_code = None) -> List[str]:
         """
         Returns a list of valid voices for the given language code.
         If no language code is provided, returns all voices.

@@ -29,12 +29,19 @@ class VideoBuilder:
         self.media_utils = media_utils
         return self
 
-    def set_background_image(self, file_path: str, ken_burns_config: dict = None):
-        """Set background as an image with optional Ken Burns effect."""
+    def set_background_image(self, file_path: str, effect_config: dict = None):
+        """Set background as an image with optional visual effects.
+        
+        Args:
+            file_path: Path to the image file
+            effect_config: Configuration for visual effects. Supported effects:
+                - Ken Burns (zoom): {"effect": "ken_burns", "zoom_factor": 0.001, "direction": "zoom-to-top-left"}
+                - Pan: {"effect": "pan", "direction": "left-to-right", "speed": "normal"}
+        """
         self.background = {
-            "type": "image",
+            "type": "image", 
             "file": file_path,
-            "ken_burns": ken_burns_config or {},
+            "effect_config": effect_config or {"effect": "ken_burns"},  # Default to Ken Burns for backward compatibility
         }
         return self
 
@@ -117,27 +124,110 @@ class VideoBuilder:
                 ["-loop", "1", "-t", str(audio_duration), "-i", self.background["file"]]
             )
 
-            # Ken Burns effect
-            ken_burns_config = self.background.get("ken_burns", {})
-            # direction = ken_burns_config.get("direction", "zoom-to-top")
-            zoom_factor = ken_burns_config.get("zoom_factor", 0.001)
-
-            # todo without upscaling we can't use the top and center zooms. upscaling increases the render time
-            zoom_expressions = {
-                "zoom-to-top": f"z='zoom+{zoom_factor}':x=iw/2-(iw/zoom/2):y=0",
-                "zoom-to-center": f"z='zoom+{zoom_factor}':x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2)",
-                "zoom-to-top-left": f"z='zoom+{zoom_factor}':x=0:y=0",
-            }
-            zoom_expr = zoom_expressions["zoom-to-top-left"]
+            # Get effect configuration with backward compatibility
+            effect_config = self.background.get("effect_config", {"effect": "ken_burns"})
+            
+            # Handle backward compatibility for old ken_burns config
+            if "ken_burns" in self.background and "effect_config" not in self.background:
+                # Old format: {"ken_burns": {"zoom_factor": 0.001, "direction": "zoom-to-top-left"}}
+                old_ken_burns = self.background.get("ken_burns", {})
+                effect_config = {
+                    "effect": "ken_burns",
+                    "zoom_factor": old_ken_burns.get("zoom_factor", 0.001),
+                    "direction": old_ken_burns.get("direction", "zoom-to-top-left")
+                }
+            
+            effect_type = effect_config.get("effect", "ken_burns")
 
             fps = 25
             duration_frames = int(audio_duration * fps)
-            zoompan_d = duration_frames + 1
-            filter_parts.append(
-                f"[{input_index}]scale={self.width}:-2,setsar=1:1,"
-                f"crop={self.width}:{self.height},"
-                f"zoompan={zoom_expr}:d={zoompan_d}:s={self.width}x{self.height}:fps={fps}[bg]"
-            )
+            
+            if effect_type == "ken_burns":
+                # Ken Burns (zoom) effect
+                zoom_factor = effect_config.get("zoom_factor", 0.001)
+                direction = effect_config.get("direction", "zoom-to-top-left")
+
+                # todo without upscaling we can't use the top and center zooms. upscaling increases the render time
+                zoom_expressions = {
+                    "zoom-to-top": f"z='zoom+{zoom_factor}':x=iw/2-(iw/zoom/2):y=0",
+                    "zoom-to-center": f"z='zoom+{zoom_factor}':x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2)",
+                    "zoom-to-top-left": f"z='zoom+{zoom_factor}':x=0:y=0",
+                }
+                zoom_expr = zoom_expressions.get(direction, zoom_expressions["zoom-to-top-left"])
+
+                zoompan_d = duration_frames + 1
+                filter_parts.append(
+                    f"[{input_index}]scale={self.width}:-2,setsar=1:1,"
+                    f"crop={self.width}:{self.height},"
+                    f"zoompan={zoom_expr}:d={zoompan_d}:s={self.width}x{self.height}:fps={fps}[bg]"
+                )
+                
+            elif effect_type == "pan":
+                # Pan effect - camera moves across the image
+                direction = effect_config.get("direction", "left-to-right")
+                speed = effect_config.get("speed", "normal")
+                
+                # Speed multipliers
+                speed_multipliers = {
+                    "slow": 0.5,
+                    "normal": 1.0,
+                    "fast": 2.0
+                }
+                speed_mult = speed_multipliers.get(speed, 1.0)
+                
+                # Calculate pan distance based on direction
+                # We'll scale the image larger to allow for panning
+                scale_factor = 1.3  # Scale image 30% larger to allow room for panning
+                scaled_width = int(self.width * scale_factor)
+                scaled_height = int(self.height * scale_factor)
+                
+                # Pan expressions for different directions
+                if direction == "left-to-right":
+                    # Start from left, move to right
+                    start_x = 0
+                    end_x = scaled_width - self.width
+                    start_y = (scaled_height - self.height) // 2
+                    end_y = start_y
+                elif direction == "right-to-left":
+                    # Start from right, move to left
+                    start_x = scaled_width - self.width
+                    end_x = 0
+                    start_y = (scaled_height - self.height) // 2
+                    end_y = start_y
+                elif direction == "top-to-bottom":
+                    # Start from top, move to bottom
+                    start_x = (scaled_width - self.width) // 2
+                    end_x = start_x
+                    start_y = 0
+                    end_y = scaled_height - self.height
+                elif direction == "bottom-to-top":
+                    # Start from bottom, move to top
+                    start_x = (scaled_width - self.width) // 2
+                    end_x = start_x
+                    start_y = scaled_height - self.height
+                    end_y = 0
+                else:
+                    # Default to left-to-right
+                    start_x = 0
+                    end_x = scaled_width - self.width
+                    start_y = (scaled_height - self.height) // 2
+                    end_y = start_y
+                
+                # Create pan expression
+                # Linear interpolation from start to end position over the duration
+                pan_x_expr = f"{start_x}+({end_x}-{start_x})*t/{audio_duration}*{speed_mult}"
+                pan_y_expr = f"{start_y}+({end_y}-{start_y})*t/{audio_duration}*{speed_mult}"
+                
+                filter_parts.append(
+                    f"[{input_index}]scale={scaled_width}:{scaled_height},setsar=1:1,"
+                    f"crop={self.width}:{self.height}:{pan_x_expr}:{pan_y_expr}[bg]"
+                )
+            
+            else:
+                # No effect, just scale and crop
+                filter_parts.append(
+                    f"[{input_index}]scale={self.width}:{self.height},setsar=1:1[bg]"
+                )
 
         elif self.background["type"] == "video":
             if audio_duration:

@@ -30,8 +30,11 @@ else:
     else:
         logger.info("File /sys/fs/cgroup/cpu.max not found, using os.cpu_count()")
 
-    num_threads = os.environ.get("NUM_THREADS", num_cores * 1.5)
+    logger.info("number of CPU cores: {}", num_cores)
+    num_threads = os.environ.get("NUM_THREADS", num_cores)
+    logger.info("number of threads to use with torch: {}", num_threads)
     torch.set_num_threads(int(num_threads))
+    torch.set_num_interop_threads(int(num_threads))
 
 map_location = torch.device(device)
 
@@ -45,3 +48,6 @@ def patched_torch_load(*args, **kwargs):
 
 
 torch.load = patched_torch_load
+
+whisper_model = os.environ.get("WHISPER_MODEL", "small")
+whisper_compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")

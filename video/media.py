@@ -70,51 +70,105 @@ class MediaUtils:
             # Add background music if provided
             music_input_index = None
             if background_music_path:
-                cmd.extend(["-i", background_music_path])
+                cmd.extend(["-stream_loop", "-1", "-i", background_music_path])
                 music_input_index = len(video_paths)
 
             # Create filter complex for concatenating videos with re-encoding
             if len(video_paths) == 1:
                 # Single video - re-encode to ensure consistency
+                # Check if the video has audio
+                audio_info = self.get_audio_info(video_paths[0])
+                has_audio = bool(audio_info.get('duration', 0) > 0)
+                
                 if background_music_path:
-                    cmd.extend(
-                        [
-                            "-filter_complex",
-                            f"[0:v]scale={target_dimensions}:force_original_aspect_ratio=decrease,pad={target_dimensions}:(ow-iw)/2:(oh-ih)/2:black,fps=30[v];[{music_input_index}:a]volume={background_music_volume}[bg];[0:a][bg]amix=inputs=2:duration=first[a]",
-                            "-map",
-                            "[v]",
-                            "-map",
-                            "[a]",
-                        ]
-                    )
+                    if has_audio:
+                        cmd.extend(
+                            [
+                                "-filter_complex",
+                                f"[0:v]scale={target_dimensions}:force_original_aspect_ratio=decrease,pad={target_dimensions}:(ow-iw)/2:(oh-ih)/2:black,fps=30[v];[{music_input_index}:a]volume={background_music_volume}[bg];[0:a][bg]amix=inputs=2:duration=first[a]",
+                                "-map",
+                                "[v]",
+                                "-map",
+                                "[a]",
+                            ]
+                        )
+                    else:
+                        # No audio in video, just use background music
+                        cmd.extend(
+                            [
+                                "-filter_complex",
+                                f"[0:v]scale={target_dimensions}:force_original_aspect_ratio=decrease,pad={target_dimensions}:(ow-iw)/2:(oh-ih)/2:black,fps=30[v];[{music_input_index}:a]volume={background_music_volume}[a]",
+                                "-map",
+                                "[v]",
+                                "-map",
+                                "[a]",
+                            ]
+                        )
                 else:
-                    cmd.extend(
-                        [
-                            "-filter_complex",
-                            f"[0:v]scale={target_dimensions}:force_original_aspect_ratio=decrease,pad={target_dimensions}:(ow-iw)/2:(oh-ih)/2:black,fps=30[v]",
-                            "-map",
-                            "[v]",
-                            "-map",
-                            "0:a",
-                        ]
-                    )
+                    if has_audio:
+                        cmd.extend(
+                            [
+                                "-filter_complex",
+                                f"[0:v]scale={target_dimensions}:force_original_aspect_ratio=decrease,pad={target_dimensions}:(ow-iw)/2:(oh-ih)/2:black,fps=30[v]",
+                                "-map",
+                                "[v]",
+                                "-map",
+                                "0:a",
+                            ]
+                        )
+                    else:
+                        # No audio in video and no background music, create silent audio
+                        video_info = self.get_video_info(video_paths[0])
+                        video_duration = video_info.get('duration', 10)  # fallback to 10 seconds
+                        cmd.extend(
+                            [
+                                "-filter_complex",
+                                f"[0:v]scale={target_dimensions}:force_original_aspect_ratio=decrease,pad={target_dimensions}:(ow-iw)/2:(oh-ih)/2:black,fps=30[v];anullsrc=channel_layout=stereo:sample_rate=48000:duration={video_duration}[a]",
+                                "-map",
+                                "[v]",
+                                "-map",
+                                "[a]",
+                            ]
+                        )
             else:
                 # Multiple videos - normalize and concatenate with re-encoding
-                # First, create normalized video streams for each input
+                # First, check which videos have audio streams
+                videos_with_audio = []
+                for i, video_path in enumerate(video_paths):
+                    video_info = self.get_video_info(video_path)
+                    # Check if video has audio by trying to get audio info
+                    audio_info = self.get_audio_info(video_path)
+                    has_audio = bool(audio_info.get('duration', 0) > 0)
+                    videos_with_audio.append(has_audio)
+                    context_logger.bind(video_index=i, has_audio=has_audio).debug("checked audio stream")
+
+                # Create normalized video streams for each input
                 normalize_filters = []
                 for i in range(len(video_paths)):
                     normalize_filters.append(
                         f"[{i}:v]scale={target_dimensions}:force_original_aspect_ratio=decrease,pad={target_dimensions}:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p[v{i}n]"
                     )
 
+                # Create audio streams for videos without audio (silent audio)
+                audio_filters = []
+                for i in range(len(video_paths)):
+                    if not videos_with_audio[i]:
+                        # Get video duration for silent audio generation
+                        video_info = self.get_video_info(video_paths[i])
+                        video_duration = video_info.get('duration', 10)  # fallback to 10 seconds
+                        audio_filters.append(f"anullsrc=channel_layout=stereo:sample_rate=48000:duration={video_duration}[a{i}n]")
+                    else:
+                        audio_filters.append(f"[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{i}n]")
+
                 # Create the concat filter using normalized streams
                 concat_inputs = ""
                 for i in range(len(video_paths)):
-                    concat_inputs += f"[v{i}n][{i}:a]"
+                    concat_inputs += f"[v{i}n][a{i}n]"
 
                 # Combine all filters
+                all_filters = normalize_filters + audio_filters
                 filter_complex = (
-                    ";".join(normalize_filters)
+                    ";".join(all_filters)
                     + f";{concat_inputs}concat=n={len(video_paths)}:v=1:a=1[v][a]"
                 )
 
@@ -237,6 +291,9 @@ class MediaUtils:
                 "duration": float(format_info.get("duration", 0)),
                 "width": video_stream.get("width"),
                 "height": video_stream.get("height"),
+                "fps": video_stream.get("avg_frame_rate", "0/1").split("/")[0],
+                "aspect_ratio": video_stream.get("display_aspect_ratio", "1:1"),
+                "codec": video_stream.get("codec_name"),
             }
 
             return video_info
@@ -292,6 +349,9 @@ class MediaUtils:
             audio_info = {
                 "duration": float(format_info.get("duration", 0)),
                 "channels": audio_stream.get("channels", 0),
+                "sample_rate": audio_stream.get("sample_rate", "0"),
+                "codec": audio_stream.get("codec_name", ""),
+                "bitrate": audio_stream.get("bit_rate", "0"),
             }
 
             return audio_info
@@ -301,6 +361,136 @@ class MediaUtils:
                 "Error getting audio info"
             )
             return {}
+
+    def extract_frame(
+        self,
+        video_path: str,
+        output_path: str,
+        time_seconds: float = 0.0,
+    ) -> bool:
+        """
+        Extracts a frame from a video at a specified time.
+
+        Args:
+            video_path: Path to the input video file
+            output_path: Path for the extracted frame image
+            time_seconds: Time in seconds to extract the frame (default: 0.0)
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Base command
+            cmd = [self.ffmpeg_path, "-y"]
+
+            # Add input video file
+            cmd.extend(["-i", video_path])
+
+            # Seek to the specified time and extract one frame
+            cmd.extend(
+                [
+                    "-ss",
+                    str(time_seconds),  # Seek to time
+                    "-vframes",
+                    "1",  # Extract only one frame
+                    "-q:v",
+                    "2",  # High quality (scale 1-31, lower is better)
+                    output_path,
+                ]
+            )
+
+            # Execute the command using the new method
+            success = self.execute_ffmpeg_command(
+                cmd,
+                "extract frame",
+                show_progress=False,  # No progress tracking for single frame extraction
+            )
+
+            if success:
+                logger.bind(video_path=video_path, time_seconds=time_seconds).debug(
+                    "frame extracted successfully"
+                )
+                return True
+            else:
+                logger.bind(video_path=video_path, time_seconds=time_seconds).error(
+                    "failed to extract frame from video"
+                )
+                return False
+
+        except Exception as e:
+            logger.bind(error=str(e)).error("Error extracting frame from video")
+            return False
+
+    def extract_frames(
+        self,
+        video_path: str,
+        output_template: str,
+        amount: int = 5,
+        length_seconds: float = None,
+    ) -> bool:
+        """
+        Args:
+            video_path: Path to the input video file
+            output_template: Template for output image files (e.g., "frame-%03d.jpg")
+            amount: Number of frames to extract (default: 5)
+            length_seconds: Length of the video in seconds (optional, if not provided will be calculated)
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get video duration if not provided
+            if length_seconds is None:
+                video_info = self.get_video_info(video_path)
+                length_seconds = video_info.get("duration", 0)
+
+            if length_seconds <= 0:
+                logger.error("invalid video duration for frame extraction")
+                return False
+
+            # Calculate frame interval (time between frames)
+            # This gives us the correct fps rate to extract exactly 'amount' frames
+            # evenly distributed across the video duration
+            frame_interval = length_seconds / amount
+
+            # Base command - using the corrected fps calculation
+            # fps=1/frame_interval extracts one frame every frame_interval seconds
+            cmd = [
+                self.ffmpeg_path,
+                "-y",
+                "-i",
+                video_path,
+                "-vf",
+                f"fps=1/{frame_interval}",
+                "-vframes",
+                str(amount),
+                "-qscale:v",
+                "2",  # High quality
+                output_template,
+            ]
+
+            # Execute the command using the new method
+            success = self.execute_ffmpeg_command(
+                cmd,
+                "extract frames",
+                expected_duration=length_seconds,
+                show_progress=True,
+            )
+
+            if success:
+                logger.bind(video_path=video_path, amount=amount).debug(
+                    "frames extracted successfully"
+                )
+                return True
+            else:
+                logger.bind(video_path=video_path, amount=amount).error(
+                    "failed to extract frames from video"
+                )
+                return False
+
+        except Exception as e:
+            logger.bind(error=str(e)).error("Error extracting frames from video")
+            return False
 
     def format_time(self, seconds: float) -> str:
         """
@@ -501,3 +691,160 @@ class MediaUtils:
                 f"error executing ffprobe command for {operation_name}"
             )
             return False, "", str(e)
+
+    @staticmethod
+    def is_hex_color(color: str) -> bool:
+        """
+        Checks if the given color string is a valid hex color.
+
+        Args:
+            color: Color string to check
+
+        Returns:
+            bool: True if it's a hex color, False otherwise
+        """
+        return all(
+            c in "0123456789abcdefABCDEF" for c in color[1:]
+        )
+
+    def colorkey_overlay(
+        self,
+        input_video_path: str,
+        overlay_video_path: str,
+        output_video_path: str,
+        color: str = "green",
+        similarity: float = 0.1,
+        blend: float = 0.1,
+    ):
+        """
+        Applies a colorkey overlay to a video using FFmpeg.
+        """
+        
+        """
+            ffmpeg -i input.mp4 -stream_loop -1 -i black_dust.mp4 \
+            -filter_complex "[1]colorkey=0x000000:0.1:0.1[ckout];[0][ckout]overlay" \
+            -shortest \
+            -c:v libx264 -preset ultrafast -crf 18 \
+            -c:a copy \
+            output.mp4
+        """
+        
+        start = time.time()
+        info = self.get_video_info(input_video_path)
+        video_duration = info.get("duration", 0)
+        
+        if not video_duration:
+            logger.error("failed to get video duration from input video")
+            return False
+        
+        color = color.lstrip("#")
+        if self.is_hex_color(color):
+            color = f"0x{color.upper()}"
+        
+        context_logger = logger.bind(
+            input_video_path=input_video_path,
+            overlay_video_path=overlay_video_path,
+            output_video_path=output_video_path,
+            video_duration=video_duration,
+            color=color,
+            similarity=similarity,
+            blend=blend,
+        )
+        context_logger.debug("Starting colorkey overlay process")
+        
+        context_logger = context_logger.bind(
+            video_duration=video_duration,
+        )
+        
+        cmd = [
+            self.ffmpeg_path, "-y",
+            "-i", input_video_path,
+            "-stream_loop", "-1",
+            "-i", overlay_video_path,
+            "-filter_complex", f"[1:v]colorkey={color}:{similarity}:{blend}[ckout];[0:v][ckout]overlay=eof_action=repeat[v]",
+            "-map", "[v]",
+            "-map", "0:a",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "18",
+            "-c:a", "copy",
+            "-t", f"{video_duration}s",
+            output_video_path,
+        ]
+
+        try:
+            success = self.execute_ffmpeg_command(
+                cmd,
+                "add colorkey overlay to video",
+                expected_duration=video_duration,
+                show_progress=True,
+            )
+
+            if success:
+                context_logger.bind(execution_time=time.time() - start).debug(
+                    "colorkey overlay added successfully",
+                )
+                return True
+            else:
+                context_logger.error("ffmpeg failed to create colorkey overlay")
+                return False
+
+        except Exception as e:
+            context_logger.bind(error=str(e)).error(
+                "error adding colorkey overlay to video",
+            )
+            return False
+        
+    def convert_pcm_to_wav(
+        self,
+        input_pcm_path: str,
+        output_wav_path: str,
+        sample_rate: int = 24000,
+        channels: int = 1,
+        target_sample_rate: int = 44100,
+    ) -> bool:
+        """
+        ffmpeg -f s16le -ar 24000 -ac 1 -i out.pcm -ar 44100 -ac 2 out_44k_stereo.wav
+        """
+        start = time.time()
+        context_logger = logger.bind(
+            input_pcm_path=input_pcm_path,
+            output_wav_path=output_wav_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            target_sample_rate=target_sample_rate,
+        )
+        context_logger.debug("Starting PCM to WAV conversion")
+
+        cmd = [
+            self.ffmpeg_path, "-y",
+            "-f", "s16le",
+            "-ar", str(sample_rate),
+            "-ac", str(channels),
+            "-i", input_pcm_path,
+            "-ar", str(target_sample_rate),
+            "-ac", "2",  # Convert to stereo
+            output_wav_path,
+        ]
+
+        try:
+            success = self.execute_ffmpeg_command(
+                cmd,
+                "convert PCM to WAV",
+                show_progress=False,
+            )
+
+            if success:
+                context_logger.bind(execution_time=time.time() - start).debug(
+                    "PCM to WAV conversion successful",
+                )
+                return True
+            else:
+                context_logger.error("ffmpeg failed to convert PCM to WAV")
+                return False
+
+        except Exception as e:
+            context_logger.bind(error=str(e)).error(
+                "error converting PCM to WAV",
+            )
+            return False
