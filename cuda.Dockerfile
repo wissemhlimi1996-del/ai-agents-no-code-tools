@@ -40,6 +40,6 @@ COPY server.py /app/server.py
 
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 8000
+EXPOSE 8002
 
 CMD ["fastapi", "run", "server.py", "--host", "127.0.0.1", "--port", "8002"]
